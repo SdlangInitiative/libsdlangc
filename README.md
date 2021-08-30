@@ -73,6 +73,8 @@ for(i = 0; i < arrlen(tag.children); i++) // arrlen being from stb_ds
         );
     }
 }
+
+sdlangTagFree(tag);
 ```
 
 # Limitations

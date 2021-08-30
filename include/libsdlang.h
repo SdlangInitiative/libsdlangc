@@ -855,8 +855,27 @@ typedef struct SdlangTag
 } SdlangTag;
 
 bool sdlangParseCharStream(SdlangCharStream stream, SdlangTag* rootTag, SdlangError* error, SdlangCharSlice* errorLine, SdlangCharSlice* errorSlice);
+void sdlangTagFree(SdlangTag tag);
 
 #ifdef SDLANG_IMPLEMENTATION
+void sdlangTagFree(SdlangTag tag)
+{
+    size_t i;
+
+    if(tag.children)
+    {
+        for(i = 0; i < arrlen(tag.children); i++)
+            sdlangTagFree(tag.children[i]);
+        arrfree(tag.children);
+    }
+
+    if(tag.attributes)
+        arrfree(tag.attributes);
+
+    if(tag.values)
+        arrfree(tag.values);
+}
+
 static SdlangValue _nextValue(SdlangToken token, SdlangError* error)
 {
     SdlangValue v;
