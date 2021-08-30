@@ -4,6 +4,8 @@
 
 This library comes bundled with the `ds` (data structure) module from the [stb](https://github.com/nothings/stb) project for convenience.
 
+This library is incomplete, please avoid heavy usage of it for now.
+
 # Installing
 
 First, grab the `include/libsdlang.h` and `include/stb_ds.h` headers.
