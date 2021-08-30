@@ -598,6 +598,8 @@ static void _someNumeric(
 void sdlangParserNext(SdlangParser* parser, SdlangError* error, SdlangCharSlice* errorLine, SdlangCharSlice* errorSlice)
 {
     parser->front.isAttrib = false;
+    parser->front.nspace = {};
+    parser->front.name = {};
     *error = NULL;
     if(sdlangCharStreamEof(&parser->stream))
     {
@@ -920,10 +922,7 @@ static SdlangTag _nextTag(SdlangParser* parser, SdlangError* error, SdlangCharSl
             if(*error)
                 return tag;
 
-            if(parser->front.name.ptr 
-                && parser->front.name.length 
-                && parser->front.type != SDLANG_TOKEN_TYPE_VALUE_BOOLEAN
-                && parser->front.type != SDLANG_TOKEN_TYPE_VALUE_NULL)
+            if(parser->front.isAttrib)
             {
                 SdlangAttribute attrib;
                 attrib.nspace = parser->front.nspace;
