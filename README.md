@@ -1,10 +1,8 @@
 # Overview
 
-`libsdlang` is a header-only C library used to parse and (todo) emit [Sdlang](https://sdlang.org/) files.
+`libsdlang` is a header-only C library used to parse and emit [Sdlang](https://sdlang.org/) files.
 
 This library comes bundled with the `ds` (data structure) module from the [stb](https://github.com/nothings/stb) project for convenience.
-
-This library is incomplete, please avoid heavy usage of it for now.
 
 # Installing
 
@@ -23,10 +21,20 @@ Then in **one** .C file add:
 
 Then just `#include` those two headers in any file you need to use this library in.
 
-# Usage
+# Parsing & AST usage
 
 Please note that the arrays in this library are from the `stb_ds` library, so please refer to that library for
 usage details.
+
+**The lifetime of any textual data is tied to the lifetime of the original string passed into the SdlangCharStream structure.**
+This is because this library does not perform copying of textual data by default.
+
+The lifetime of any programmatic additions of textual data to the AST is completely down to the user. In the future
+I may replace the root tag with a special type to consolidate this kind of memory into, so it can be freed automatically
+by `sdlangTagFree`.
+
+Your best bet at the moment though is to use something like a region allocator, so you can simply "deallocate" all your
+custom textual data at the same time as calling `sdlangTagFree`.
 
 In short:
 
@@ -78,6 +86,90 @@ for(i = 0; i < arrlen(tag.children); i++) // arrlen being from stb_ds
 
 sdlangTagFree(tag);
 ```
+
+# Usage for emitting
+
+* Build AST in some way
+* Call `sdlangEmitToString`, and don't forget to free the string.
+* Or call `sdlangEmit` with a custom emitter function.
+
+# Escaping strings
+
+If an `SdlangValue` is of type `SDLANG_VALUE_TYPE_STRING` and the boolean property `SdlangValue.requiresEscape` is `true`, then
+the string contains characters or is formatted in a way that requires the string to be escaped.
+
+To perform string escaping, you must first call `sdlangCharStreamFromValue` to create an `SdlangCharStream` from the `SdlValue`.
+
+Then you must choose between either of these functions:
+
+* sdlangCharStreamEscapeNext - Allocationless iterator over the different "substrings" of the main string.
+* sdlangCharStreamEscapeFull - Allocates a new string and fully escapes the main string into it. This memory must be `free`ed.
+
+So in other words - choose between convenience or not having to manage memory.
+
+An example usage of `sdlangCharStreamEscapeNext` would be... well... `sdlangCharStreamEscapeFull`'s source code:
+
+```c
+SdlangCharSlice sdlangCharStreamEscapeFull(SdlangCharStream stream)
+{
+    char* buffer = (char*)calloc(stream.textLength+1, 1);
+    size_t written = 0;
+
+    SdlangCharSlice next;
+    while(sdlangCharStreamEscapeNext(&stream, &next))
+    {
+        const size_t end = written + next.length;
+        if(end > stream.textLength) // Shouldn't ever really happen, buuuuut better safe than sorry.
+            break;
+        memcpy(buffer+written, next.ptr, next.length);
+        written = end;
+    }
+
+    SdlangCharSlice slice = { buffer, written };
+    return slice;
+}
+```
+
+`sdlangCharStreamEscapeFull` is simple enough that it doesn't need an example, but I want to metion again that **the memory must be `free`ed**
+since we have to allocate a new string instead of slicing the original.
+
+# Helpers
+
+For quality of life purposes, there are a few helper functions included with the base library.
+
+## SdlangAttribute\* sdlangTagGetAttribute(SdlangTag tag, const char\* name)
+
+This function will return either a pointer to an attribute called `name` in `tag`, or it'll return `NULL` if the attribute doesn't exist.
+
+## SDLANG_CHAR_SLICE(string)
+
+This macro will create an initialiser expression for `SdlangCharSlice`.
+
+# Tests
+
+To run the unittests, run the following commands:
+
+```c
+mkdir build
+cd build
+cmake -G Ninja ..
+ninja
+./test_runner
+```
+
+# Configuration
+
+In the same file where you define `SDLANG_IMPLEMENTATION`, you can also define other values:
+
+## `SDLANG_EMIT_NO_BRANCH` 
+
+By default, `sdlangEmit` constantly checks for error messages so it can abort as soon as possible.
+This results in every other line being a branch to perform this check.
+
+Defining `SDLANG_EMIT_NO_BRANCH` means `sdlangEmit` won't check at every possible opportunity, resulting in better performance.
+
+However this does mean the emitter function may be called multiple times after detecting an error before `sdlangEmit` finally aborts
+its attempt.
 
 # Limitations
 

@@ -17,6 +17,7 @@ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN 
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include "stb_ds.h"
 
@@ -45,6 +46,8 @@ const SdlangError SDLANG_ERROR_UNEXPECTED_DOT                     = "Unexpected 
 const SdlangError SDLANG_ERROR_UNTERMINATED_STRING                = "Unterminated string.";
 const SdlangError SDLANG_ERROR_NUMBER_TOO_LARGE                   = "Number is too large to parse, which likely means the number isn't even valid.";
 
+#define SDLANG_CHAR_SLICE(str) { str, strlen(str) }
+
 typedef struct SdlangCharSlice 
 {
     const char* ptr;
@@ -54,7 +57,7 @@ typedef struct SdlangCharSlice
 typedef struct SdlangCharStream 
 {
     const char* text;
-    const size_t textLength;
+    size_t textLength;
     size_t cursor;
 } SdlangCharStream;
 
@@ -1024,6 +1027,304 @@ bool sdlangParseCharStream(SdlangCharStream stream, SdlangTag* rootTag, SdlangEr
 
     return true;
 }
+#endif
+
+SdlangAttribute* sdlangTagGetAttribute(SdlangTag tag, const char* name);
+bool sdlangCharStreamFromValue(SdlangValue value, SdlangCharStream* stream);
+bool sdlangCharStreamEscapeNext(SdlangCharStream* stream, SdlangCharSlice* slice);
+SdlangCharSlice sdlangCharStreamEscapeFull(SdlangCharStream stream);
+
+#ifdef SDLANG_IMPLEMENTATION
+SdlangCharSlice sdlangCharStreamEscapeFull(SdlangCharStream stream)
+{
+    char* buffer = (char*)calloc(stream.textLength+1, 1);
+    size_t written = 0;
+
+    SdlangCharSlice next;
+    while(sdlangCharStreamEscapeNext(&stream, &next))
+    {
+        const size_t end = written + next.length;
+        if(end > stream.textLength) // Shouldn't ever really happen, buuuuut better safe than sorry.
+            break;
+        memcpy(buffer+written, next.ptr, next.length);
+        written = end;
+    }
+
+    SdlangCharSlice slice = { buffer, written };
+    return slice;
+}
+
+bool sdlangCharStreamEscapeNext(SdlangCharStream* stream, SdlangCharSlice* slice)
+{
+    if(sdlangCharStreamEof(stream))
+        return false;
+
+    if(sdlangCharStreamPeek(stream) == '\\')
+    {
+        stream->cursor++;
+        if(sdlangCharStreamEof(stream))
+            return false;
+
+        static const SdlangCharSlice _t = { "\t", 1 };
+        static const SdlangCharSlice _n = { "\n", 1 };
+
+        switch(sdlangCharStreamEat(stream))
+        {
+        case 't': *slice = _t; return true;
+        case 'n': *slice = _n; return true;
+
+        default: break;
+        }
+    }
+
+    const size_t start = stream->cursor;
+    while(!sdlangCharStreamEof(stream) && sdlangCharStreamPeek(stream) != '\\')
+        stream->cursor++;
+
+    slice->ptr = stream->text + start;
+    slice->length = stream->cursor - start;
+    return true;
+}
+
+bool sdlangCharStreamFromValue(SdlangValue value, SdlangCharStream* stream)
+{
+    if(value.type != SDLANG_VALUE_TYPE_STRING)
+        return false;
+
+    stream->text = value.stringValue.ptr;
+    stream->textLength = value.stringValue.length;
+    stream->cursor = 0;
+    return true;
+}
+
+SdlangAttribute* sdlangTagGetAttribute(SdlangTag tag, const char* name)
+{
+    if(!tag.attributes)
+        return NULL;
+
+    size_t i;
+    for(i = 0; i < arrlen(tag.attributes); i++)
+    {
+        if(strncmp(name, tag.attributes[i].name.ptr, tag.attributes[i].name.length) == 0)
+            return &tag.attributes[i];
+    }
+
+    return NULL;
+}
+#endif
+
+typedef struct _SdlangStringEmit
+{
+    char** ptr;
+    size_t length;
+    size_t capacity;
+} _SdlangStringEmit;
+
+typedef const char* (*SdlangEmitterFunc)(const SdlangCharSlice slice, void* userData);
+
+const char* sdlangEmit(SdlangTag tag, SdlangEmitterFunc emitter, void* userData, bool isRoot = true, int level = -1);
+const char* sdlangEmitToString(SdlangTag tag, char** output);
+
+#ifdef SDLANG_IMPLEMENTATION
+
+#ifdef SDLANG_EMIT_NO_BRANCH
+#define _SDLANG_EMIT_RETURN(...) error = emitter(__VA_ARGS__, userData)
+#else
+#define _SDLANG_EMIT_RETURN(...) if(error = emitter(__VA_ARGS__, userData)) return error
+#endif
+
+static const char* _emitString(const SdlangCharSlice slice, void* userData)
+{
+    _SdlangStringEmit* info = (_SdlangStringEmit*)userData;
+    if(!info->capacity)
+    {
+        *info->ptr = (char*)malloc(128);
+        info->capacity = 128;
+    }
+    while(info->length + slice.length >= info->capacity)
+    {
+        *info->ptr = (char*)realloc(*info->ptr, info->capacity * 2);
+        info->capacity *= 2;
+    }
+    if(!*info->ptr)
+        return "Failed to allocate memory.";
+
+    memcpy(*info->ptr + info->length, slice.ptr, slice.length);
+    info->length += slice.length;
+    (*info->ptr)[info->length] = '\0';
+    return NULL;
+}
+
+const char* sdlangEmitToString(SdlangTag tag, char** output)
+{
+    _SdlangStringEmit emit = { output, 0, 0 };
+    return sdlangEmit(tag, _emitString, &emit);
+}
+
+static const char* _emitValue(SdlangValue v, SdlangEmitterFunc emitter, void* userData)
+{
+    const char* error = NULL;
+    char buffer[50];
+    SdlangCharSlice slice;
+    slice.ptr = buffer;
+    switch(v.type)
+    {
+    case SDLANG_VALUE_TYPE_BOOLEAN:
+        return v.boolValue ? emitter({ "true", 4 }, userData) : emitter({ "false", 5 }, userData);
+    case SDLANG_VALUE_TYPE_DATE: 
+        slice.length = sprintf(buffer, "%d", (int)v.dateValue.year);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ "/", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.dateValue.month);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ "/", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.dateValue.day);
+        _SDLANG_EMIT_RETURN(slice);
+        return error;
+    case SDLANG_VALUE_TYPE_TIMESPAN: break;
+        slice.length = sprintf(buffer, "%d", (int)v.timeSpanValue.days);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ "d:", 2 });
+        slice.length = sprintf(buffer, "%d", (int)v.timeSpanValue.hours);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ ":", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.timeSpanValue.minutes);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ ":", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.timeSpanValue.seconds);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ ".", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.timeSpanValue.milliseconds);
+        _SDLANG_EMIT_RETURN(slice);
+        return error;
+    case SDLANG_VALUE_TYPE_DATETIME: break;
+        slice.length = sprintf(buffer, "%d", (int)v.dateTimeValue.date.year);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ "/", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.dateTimeValue.date.month);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ "/", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.dateTimeValue.date.day);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ " ", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.dateTimeValue.time.hours);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ ":", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.dateTimeValue.time.minutes);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ ":", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.dateTimeValue.time.seconds);
+        _SDLANG_EMIT_RETURN(slice);
+        _SDLANG_EMIT_RETURN({ ".", 1 });
+        slice.length = sprintf(buffer, "%d", (int)v.dateTimeValue.time.milliseconds);
+        _SDLANG_EMIT_RETURN(slice);
+        return error;
+    case SDLANG_VALUE_TYPE_FLOATING:
+        slice.length = sprintf(buffer, "%lf", v.floatValue);
+        return emitter(slice, userData);
+    case SDLANG_VALUE_TYPE_INTEGER:
+        slice.length = sprintf(buffer, "%lld", v.intValue);
+        return emitter(slice, userData);
+    case SDLANG_VALUE_TYPE_NULL:
+        return emitter({ "null", 4 }, userData);
+    case SDLANG_VALUE_TYPE_STRING:
+        // TODO: Not WYSIWYG strings
+        _SDLANG_EMIT_RETURN({ "`", 1 });
+        _SDLANG_EMIT_RETURN(v.stringValue);
+        return emitter({ "`", 1 }, userData);
+
+    default: assert(0);
+    }
+    return NULL;
+}
+
+const char* sdlangEmit(SdlangTag tag, SdlangEmitterFunc emitter, void* userData, bool isRoot, int level)
+{
+    const char* error = NULL;
+    size_t i;
+
+    if(level > 0)
+    {
+        for(i = 0; i < level; i++)
+        {
+            char buffer[5] = "    ";
+            SdlangCharSlice slice = { buffer, 4 };
+            _SDLANG_EMIT_RETURN(slice);
+        }
+    }
+
+    if(!isRoot)
+    {
+        if(!tag.name.length)
+            return "Expected non-root tag to have a name.";
+
+        if(tag.nspace.length)
+        {
+            _SDLANG_EMIT_RETURN(tag.nspace);
+            _SDLANG_EMIT_RETURN({ ":", 1 });
+        }
+        _SDLANG_EMIT_RETURN(tag.name);
+        _SDLANG_EMIT_RETURN({ " ", 1 });
+    }
+
+    if(tag.values)
+    {
+        for(i = 0; i < arrlen(tag.values); i++)
+        {
+            if(error = _emitValue(tag.values[i], emitter, userData))
+                return error;
+            _SDLANG_EMIT_RETURN({ " ", 1 });
+        }
+    }
+
+    if(tag.attributes)
+    {
+        for(i = 0; i < arrlen(tag.attributes); i++)
+        {
+            SdlangAttribute attrib = tag.attributes[i];
+            
+            if(attrib.nspace.length)
+            {
+                _SDLANG_EMIT_RETURN(attrib.nspace);
+                _SDLANG_EMIT_RETURN({ ":", 1 });
+            }
+            _SDLANG_EMIT_RETURN(attrib.name);
+            _SDLANG_EMIT_RETURN({ "=", 1 });
+            if(error = _emitValue(tag.attributes[i].value, emitter, userData))
+                return error;
+            _SDLANG_EMIT_RETURN({ " ", 1 });
+        }
+    }
+
+    if(tag.children)
+    {
+        if(!isRoot)
+            _SDLANG_EMIT_RETURN({ "{\n", 2 });
+        for(i = 0; i < arrlen(tag.children); i++)
+        {
+            if(error = sdlangEmit(tag.children[i], emitter, userData, false, level+1))
+                return error;
+        }
+        if(!isRoot)
+        {
+            if(level > 0)
+            {
+                for(i = 0; i < level; i++)
+                {
+                    char buffer[5] = "    ";
+                    SdlangCharSlice slice = { buffer, 4 };
+                    _SDLANG_EMIT_RETURN(slice);
+                }
+            }
+            _SDLANG_EMIT_RETURN({ "}", 1 });
+        }
+    }
+
+    _SDLANG_EMIT_RETURN({ "\n", 1 });
+
+    return error;
+}
+
 #endif
 
 #ifdef __cplusplus

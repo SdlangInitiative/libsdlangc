@@ -19,7 +19,7 @@ add_executable(
     test_runner
     "test/init.cpp"
     "test/parser_basic.cpp"
- "test/parser_ast.cpp")
+ "test/parser_ast.cpp" "test/helpers.cpp" "test/emit.cpp")
 target_link_libraries(
     test_runner
     gtest_main
