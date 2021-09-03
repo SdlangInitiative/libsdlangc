@@ -638,6 +638,12 @@ void sdlangParserNext(SdlangParser* parser, SdlangError* error, SdlangCharSlice*
         parser->front.type = SDLANG_TOKEN_TYPE_NEWLINE;
         return;
     }
+    else if(ch == '\\')
+    {
+        parser->stream.cursor += 2;
+        sdlangParserNext(parser, error, errorLine, errorSlice);
+        return;
+    }
 
     bool foundIdent = false, isString = false, wasUnterminated = false, isIdent = false;
 
@@ -1130,7 +1136,7 @@ const char* sdlangEmitToString(SdlangTag tag, char** output);
 #ifdef SDLANG_EMIT_NO_BRANCH
 #define _SDLANG_EMIT_RETURN(...) error = emitter(__VA_ARGS__, userData)
 #else
-#define _SDLANG_EMIT_RETURN(...) if(error = emitter(__VA_ARGS__, userData)) return error
+#define _SDLANG_EMIT_RETURN(...) if((error = emitter(__VA_ARGS__, userData))) return error
 #endif
 
 static const char* _emitString(const SdlangCharSlice slice, void* userData)
@@ -1271,7 +1277,7 @@ const char* sdlangEmit(SdlangTag tag, SdlangEmitterFunc emitter, void* userData,
     {
         for(i = 0; i < arrlen(tag.values); i++)
         {
-            if(error = _emitValue(tag.values[i], emitter, userData))
+            if((error = _emitValue(tag.values[i], emitter, userData)))
                 return error;
             _SDLANG_EMIT_RETURN({ " ", 1 });
         }
@@ -1290,7 +1296,7 @@ const char* sdlangEmit(SdlangTag tag, SdlangEmitterFunc emitter, void* userData,
             }
             _SDLANG_EMIT_RETURN(attrib.name);
             _SDLANG_EMIT_RETURN({ "=", 1 });
-            if(error = _emitValue(tag.attributes[i].value, emitter, userData))
+            if((error = _emitValue(tag.attributes[i].value, emitter, userData)))
                 return error;
             _SDLANG_EMIT_RETURN({ " ", 1 });
         }
@@ -1302,7 +1308,7 @@ const char* sdlangEmit(SdlangTag tag, SdlangEmitterFunc emitter, void* userData,
             _SDLANG_EMIT_RETURN({ "{\n", 2 });
         for(i = 0; i < arrlen(tag.children); i++)
         {
-            if(error = sdlangEmit(tag.children[i], emitter, userData, false, level+1))
+            if((error = sdlangEmit(tag.children[i], emitter, userData, false, level+1)))
                 return error;
         }
         if(!isRoot)

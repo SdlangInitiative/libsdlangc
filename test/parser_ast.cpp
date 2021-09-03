@@ -65,3 +65,11 @@ TEST(Ast, TagChildren)
     EXPECT_EQ(toStr(tag.children[0].children[0].name), "child");
     EXPECT_EQ(tag.children[0].children[0].values[0].intValue, 123);
 }
+
+TEST(Ast, TagWithLineBrokenValues)
+{
+	std::string code = "tag \"abc\"\\\n\t123";
+	SdlangTag tag = parse(code);
+	ASSERT_EQ(arrlen(tag.children[0].values), 2);
+	EXPECT_EQ(tag.children[0].values[1].intValue, 123);
+}
